@@ -39,7 +39,7 @@ namespace BizHawk.Client.EmuHawk
         /// </summary>
         public void UpdateValues()
         {
-            UpdateMemoryWatchers();
+            m_timerSession?.OnFrame();
         }
 
         /// <summary>
@@ -48,7 +48,7 @@ namespace BizHawk.Client.EmuHawk
         /// </summary>
         public void FastUpdate()
         {
-            UpdateMemoryWatchers();
+            m_timerSession?.OnFrame();
         }
 
         public void NewUpdate(ToolFormUpdateType type)
@@ -59,6 +59,13 @@ namespace BizHawk.Client.EmuHawk
         /// </summary>
         public void Restart()
         {
+            if (m_timerSession != null)
+            {
+                m_timerSession.Dispose();
+            }
+
+            m_timerSession = new TimerSession(m_splitProfile, MemoryDomains, Debuggable);
+
             //Debuggable.MemoryCallbacks.Add(new MemoryCallback(MemoryDomains.MainMemory.Name, MemoryCallbackType.Write, "", OnMemoryWrite, 0x079c, null));
         }
 
@@ -74,7 +81,7 @@ namespace BizHawk.Client.EmuHawk
 
         private void connectButton_Click(object sender, EventArgs e)
         {
-            if ((m_currentSession == null) || (m_currentSession.State == LiveSplitConnectionSessionState.Complete))
+            if ((m_liveSplitConnectionSession == null) || (m_liveSplitConnectionSession.State == LiveSplitConnectionSessionState.Complete))
             {
                 var ip = ipTextBox.Text;
                 var port = int.Parse(portTextBox.Text);
@@ -82,13 +89,13 @@ namespace BizHawk.Client.EmuHawk
                 LastConnectionAttemptIp = ip;
                 LastConnectionAttemptPort = port;
 
-                m_currentSession = new LiveSplitConnectionSession(ip, port);
-                m_currentSession.StateChanged += LiveSplitSession_StateChanged;
-                m_currentSession.Connect();
+                m_liveSplitConnectionSession = new LiveSplitConnectionSession(ip, port);
+                m_liveSplitConnectionSession.StateChanged += LiveSplitSession_StateChanged;
+                m_liveSplitConnectionSession.Connect();
             }
-            else if (m_currentSession.State == LiveSplitConnectionSessionState.Connected)
+            else if (m_liveSplitConnectionSession.State == LiveSplitConnectionSessionState.Connected)
             {
-                m_currentSession.Disconnect();
+                m_liveSplitConnectionSession.Disconnect();
             }
             UpdateConnectionState();
         }
@@ -126,29 +133,29 @@ namespace BizHawk.Client.EmuHawk
             //(0x1c1f, [(0x1c1f, 0x0c)]),                  # Space jump
             //(0x1c1f, [(0x1c1f, 0x12)])]                  # Plasma beam
 
-            m_splitTriggerList = new List<MemoryTrigger>
-            {
-                new MemoryTrigger(0x079c, new List<Tuple<uint, uint>>
+            m_splitProfile = new SplitProfile(
+                "Super Metroid",
+                new List<MemoryTrigger>
                 {
-                    new Tuple<uint, uint>(0x079c, 0xdf),
-                    new Tuple<uint, uint>(0x079b, 0x45),
-                }),
-                new MemoryTrigger(0x0a42, new List<Tuple<uint, uint>>
-                {
-                    new Tuple<uint, uint>(0x0a42, 0x13),
-                }),
-                new MemoryTrigger(0x1c1f, new List<Tuple<uint, uint>>
-                {
-                    new Tuple<uint, uint>(0x1c1f, 0x09),
-                }),
-            };
-
-            m_nextSplitConditionIndex = 0;
+                    new MemoryTrigger(0x079c, new List<Tuple<uint, uint>>
+                    {
+                        new Tuple<uint, uint>(0x079c, 0xdf),
+                        new Tuple<uint, uint>(0x079b, 0x45),
+                    }),
+                    new MemoryTrigger(0x0a42, new List<Tuple<uint, uint>>
+                    {
+                        new Tuple<uint, uint>(0x0a42, 0x13),
+                    }),
+                    new MemoryTrigger(0x1c1f, new List<Tuple<uint, uint>>
+                    {
+                        new Tuple<uint, uint>(0x1c1f, 0x09),
+                    }),
+                });
 
             triggerListBox.Items.Clear();
-            foreach (var t in m_splitTriggerList)
+            foreach (var t in m_splitProfile.SplitTriggerList)
             {
-                var isCurrentTrigger = (m_nextSplitConditionIndex == triggerListBox.Items.Count);
+                var isCurrentTrigger = (m_timerSession?.CurrentSplitIndex == triggerListBox.Items.Count);
 
                 var triggerString = String.Format("{0}0x{1:x4}", isCurrentTrigger ? "--> " : "    ", t.TriggerAddress);
                 foreach (var v in t.ExpectedMemoryValues)
@@ -167,9 +174,9 @@ namespace BizHawk.Client.EmuHawk
 
         private void UpdateConnectionState()
         {
-            if (m_currentSession != null)
+            if (m_liveSplitConnectionSession != null)
             {
-                switch (m_currentSession.State)
+                switch (m_liveSplitConnectionSession.State)
                 {
                     case LiveSplitConnectionSessionState.NotConnected:
                         connectionStatusLabel.Text = "Not connected";
@@ -184,9 +191,9 @@ namespace BizHawk.Client.EmuHawk
                         connectionStatusLabel.Text = "Connected";
                         break;
                     case LiveSplitConnectionSessionState.Complete:
-                        if (m_currentSession.Error != null)
+                        if (m_liveSplitConnectionSession.Error != null)
                         {
-                            connectionStatusLabel.Text = "Error: " + m_currentSession.Error.Message;
+                            connectionStatusLabel.Text = "Error: " + m_liveSplitConnectionSession.Error.Message;
                         }
                         else
                         {
@@ -213,9 +220,9 @@ namespace BizHawk.Client.EmuHawk
             }
             else
             {
-                if (m_currentSession != null)
+                if (m_liveSplitConnectionSession != null)
                 {
-                    switch (m_currentSession.State)
+                    switch (m_liveSplitConnectionSession.State)
                     {
                         case LiveSplitConnectionSessionState.NotConnected:
                         case LiveSplitConnectionSessionState.Complete:
@@ -244,27 +251,8 @@ namespace BizHawk.Client.EmuHawk
             }
         }
 
-        private void UpdateMemoryWatchers()
-        {
-            //if (m_nextSplitConditionIndex < m_splitTriggerList.Count)
-            //{
-            //    var currentSplitCondition = m_splitTriggerList[m_nextSplitConditionIndex];
-
-            //    //if (wereConditionsMet)
-            //    //{
-            //    //    ++m_nextSplitConditionIndex;
-            //    //    m_lastWatchLocationValue = -1;
-
-            //    //    if (m_currentSession != null)
-            //    //    {
-            //    //        m_currentSession.SendStartOrSplitTimerCommand();
-            //    //    }
-            //    //}
-            //}
-        }
-
-        private List<MemoryTrigger> m_splitTriggerList;
-        private int m_nextSplitConditionIndex = 0;
-        private LiveSplitConnectionSession m_currentSession;
+        private SplitProfile m_splitProfile;
+        private LiveSplitConnectionSession m_liveSplitConnectionSession;
+        private TimerSession m_timerSession;
     }
 }
