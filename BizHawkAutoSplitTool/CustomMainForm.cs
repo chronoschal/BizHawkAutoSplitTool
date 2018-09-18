@@ -1,25 +1,12 @@
-﻿using System;
+﻿using BizHawk.Emulation.Common;
+using BizHawkAutoSplitTool;
+using System;
 using System.Collections.Generic;
 using System.Windows.Forms;
 
-using BizHawk.Client.Common;
-using BizHawk.Emulation.Common;
-
 namespace BizHawk.Client.EmuHawk
 {
-    class MemoryTrigger
-    {
-        public MemoryTrigger(uint triggerAddress, List<Tuple<uint, uint>> expectedMemoryValues)
-        {
-            TriggerAddress = triggerAddress;
-            ExpectedMemoryValues = expectedMemoryValues;
-        }
-
-        public uint TriggerAddress { get; private set; }
-        public IReadOnlyList<Tuple<uint, uint>> ExpectedMemoryValues { get; private set; }
-    }
-
-    public partial class CustomMainForm : Form, IExternalToolForm
+    public partial class CustomMainForm : Form, IExternalToolForm, IToolFormAutoConfig
     {
         public CustomMainForm()
         {
@@ -31,6 +18,12 @@ namespace BizHawk.Client.EmuHawk
 
         [OptionalService]
         private IDebuggable Debuggable { get; set; }
+
+        [ConfigPersist]
+        private string LastConnectionAttemptIp { get; set; }
+
+        [ConfigPersist]
+        private int LastConnectionAttemptPort { get; set; }
 
         /// <summary>
         /// Return true if you want the <see cref="UpdateValues"/> method
@@ -46,7 +39,7 @@ namespace BizHawk.Client.EmuHawk
         /// </summary>
         public void UpdateValues()
         {
-            OnMemoryWrite();
+            UpdateMemoryWatchers();
         }
 
         /// <summary>
@@ -55,33 +48,45 @@ namespace BizHawk.Client.EmuHawk
         /// </summary>
         public void FastUpdate()
         {
-            OnMemoryWrite();
+            UpdateMemoryWatchers();
         }
 
         public void NewUpdate(ToolFormUpdateType type)
         { }
 
         /// <summary>
-        /// Restart is called the first time you call the form
-        /// but also when you start playing a movie
+        /// Restart is called when a core boots
         /// </summary>
         public void Restart()
         {
-
             //Debuggable.MemoryCallbacks.Add(new MemoryCallback(MemoryDomains.MainMemory.Name, MemoryCallbackType.Write, "", OnMemoryWrite, 0x079c, null));
+        }
+
+        protected override void OnLoad(EventArgs e)
+        {
+            base.OnLoad(e);
+
+            ipTextBox.Text = LastConnectionAttemptIp;
+            portTextBox.Text = LastConnectionAttemptPort.ToString();
         }
 
         private delegate void InvokeDelegate();
 
         private void connectButton_Click(object sender, EventArgs e)
         {
-            if ((m_currentSession == null) || (m_currentSession.State == BizHawkAutoSplitTool.LiveSplitConnectionSessionState.Complete))
+            if ((m_currentSession == null) || (m_currentSession.State == LiveSplitConnectionSessionState.Complete))
             {
-                m_currentSession = new BizHawkAutoSplitTool.LiveSplitConnectionSession(ipTextBox.Text, int.Parse(portTextBox.Text));
+                var ip = ipTextBox.Text;
+                var port = int.Parse(portTextBox.Text);
+
+                LastConnectionAttemptIp = ip;
+                LastConnectionAttemptPort = port;
+
+                m_currentSession = new LiveSplitConnectionSession(ip, port);
                 m_currentSession.StateChanged += LiveSplitSession_StateChanged;
                 m_currentSession.Connect();
             }
-            else if (m_currentSession.State == BizHawkAutoSplitTool.LiveSplitConnectionSessionState.Connected)
+            else if (m_currentSession.State == LiveSplitConnectionSessionState.Connected)
             {
                 m_currentSession.Disconnect();
             }
@@ -90,12 +95,69 @@ namespace BizHawk.Client.EmuHawk
 
         private void ipTextBox_TextChanged(object sender, EventArgs e)
         {
-
+            UpdateConnectButtonState();
         }
 
         private void portTextBox_TextChanged(object sender, EventArgs e)
         {
+            UpdateConnectButtonState();
+        }
 
+        private void loadButton_Click(object sender, EventArgs e)
+        {
+            //(0x079c, [(0x079b, 0x45), (0x079c, 0xdf)]),  # Start
+            //(0x0a42, [(0x0a42, 0x13)]),                  # Ceres elevator
+            //(0x1c1f, [(0x1c1f, 0x09)]),                  # Morph ball
+            //(0x1c1f, [(0x1c1f, 0x02)]),                  # Missiles
+            //(0x1c1f, [(0x1c1f, 0x13)]),                  # Bombs
+            //(0x1c1f, [(0x1c1f, 0x03)]),                  # Super missiles
+            //(0x1c1f, [(0x1c1f, 0x0e)]),                  # Charge beam                 
+            //(0x079c, [(0x079b, 0x9f), (0x079c, 0xa5)]),  # Kraid room
+            //(0x1c1f, [(0x1c1f, 0x07)]),                  # Varia Suit
+            //(0x1c1f, [(0x1c1f, 0x0b)]),                  # Hi-Jump Boots
+            //(0x1c1f, [(0x1c1f, 0x0d)]),                  # Speed Booster
+            //(0x1c1f, [(0x1c1f, 0x10)]),                  # Wave Beam
+            //(0x1c1f, [(0x1c1f, 0x0f)]),                  # Ice beam
+            //(0x1c1f, [(0x1c1f, 0x04)]),                  # Power bomb
+            //(0x079c, [(0x079b, 0x13), (0x079c, 0xcd)]),  # Phantoon room
+            //(0x1c1f, [(0x1c1f, 0x1a)]),                  # Gravity Suit
+            //(0x079c, [(0x079b, 0x5e), (0x079c, 0xd9)]),  # Botwoon's room
+            //(0x079c, [(0x079b, 0x60), (0x079c, 0xda)]),  # Draygon's room
+            //(0x1c1f, [(0x1c1f, 0x0c)]),                  # Space jump
+            //(0x1c1f, [(0x1c1f, 0x12)])]                  # Plasma beam
+
+            m_splitTriggerList = new List<MemoryTrigger>
+            {
+                new MemoryTrigger(0x079c, new List<Tuple<uint, uint>>
+                {
+                    new Tuple<uint, uint>(0x079c, 0xdf),
+                    new Tuple<uint, uint>(0x079b, 0x45),
+                }),
+                new MemoryTrigger(0x0a42, new List<Tuple<uint, uint>>
+                {
+                    new Tuple<uint, uint>(0x0a42, 0x13),
+                }),
+                new MemoryTrigger(0x1c1f, new List<Tuple<uint, uint>>
+                {
+                    new Tuple<uint, uint>(0x1c1f, 0x09),
+                }),
+            };
+
+            m_nextSplitConditionIndex = 0;
+
+            triggerListBox.Items.Clear();
+            foreach (var t in m_splitTriggerList)
+            {
+                var isCurrentTrigger = (m_nextSplitConditionIndex == triggerListBox.Items.Count);
+
+                var triggerString = String.Format("{0}0x{1:x4}", isCurrentTrigger ? "--> " : "    ", t.TriggerAddress);
+                foreach (var v in t.ExpectedMemoryValues)
+                {
+                    triggerString += string.Format(" (0x{0:x4} = 0x{1:x4})", v.Item1, v.Item2);
+                }
+
+                triggerListBox.Items.Add(triggerString);
+            }
         }
 
         private void LiveSplitSession_StateChanged(object sender, EventArgs e)
@@ -109,29 +171,19 @@ namespace BizHawk.Client.EmuHawk
             {
                 switch (m_currentSession.State)
                 {
-                    case BizHawkAutoSplitTool.LiveSplitConnectionSessionState.NotConnected:
-                        connectButton.Enabled = true;
-                        connectButton.Text = "Connect";
+                    case LiveSplitConnectionSessionState.NotConnected:
                         connectionStatusLabel.Text = "Not connected";
                         break;
-                    case BizHawkAutoSplitTool.LiveSplitConnectionSessionState.Connecting:
-                        connectButton.Enabled = false;
-                        connectButton.Text = "Connect";
+                    case LiveSplitConnectionSessionState.Connecting:
                         connectionStatusLabel.Text = "Connecting";
                         break;
-                    case BizHawkAutoSplitTool.LiveSplitConnectionSessionState.Connected:
-                        connectButton.Enabled = true;
-                        connectButton.Text = "Disconnect";
+                    case LiveSplitConnectionSessionState.Connected:
                         connectionStatusLabel.Text = "Connected";
                         break;
-                    case BizHawkAutoSplitTool.LiveSplitConnectionSessionState.Disconnecting:
-                        connectButton.Enabled = false;
-                        connectButton.Text = "Disconnect";
+                    case LiveSplitConnectionSessionState.Disconnecting:
                         connectionStatusLabel.Text = "Connected";
                         break;
-                    case BizHawkAutoSplitTool.LiveSplitConnectionSessionState.Complete:
-                        connectButton.Enabled = true;
-                        connectButton.Text = "Connect";
+                    case LiveSplitConnectionSessionState.Complete:
                         if (m_currentSession.Error != null)
                         {
                             connectionStatusLabel.Text = "Error: " + m_currentSession.Error.Message;
@@ -145,83 +197,74 @@ namespace BizHawk.Client.EmuHawk
             }
             else
             {
-                connectButton.Enabled = true;
                 connectionStatusLabel.Text = "Not connected";
             }
+
+            UpdateConnectButtonState();
         }
 
-        private void OnMemoryWrite()
+        private void UpdateConnectButtonState()
         {
-            if (m_nextSplitConditionIndex < m_splitConditionList.Count)
+            System.Net.IPAddress addr;
+            int port;
+            if (!System.Net.IPAddress.TryParse(ipTextBox.Text, out addr) || !int.TryParse(portTextBox.Text, out port))
             {
-                var currentSplitCondition = m_splitConditionList[m_nextSplitConditionIndex];
-                var currentWatchLocationValue = MemoryDomains.MainMemory.PeekByte(currentSplitCondition.TriggerAddress);
-                if (currentWatchLocationValue != m_lastWatchLocationValue)
+                connectButton.Enabled = false;
+            }
+            else
+            {
+                if (m_currentSession != null)
                 {
-                    bool wereConditionsMet = true;
-                    foreach (var v in currentSplitCondition.ExpectedMemoryValues)
+                    switch (m_currentSession.State)
                     {
-                        if (MemoryDomains.MainMemory.PeekByte(v.Item1) != v.Item2)
-                        {
-                            wereConditionsMet = false;
+                        case LiveSplitConnectionSessionState.NotConnected:
+                        case LiveSplitConnectionSessionState.Complete:
+                            connectButton.Enabled = true;
+                            connectButton.Text = "Connect";
                             break;
-                        }
+                        case LiveSplitConnectionSessionState.Connecting:
+                            connectButton.Enabled = false;
+                            connectButton.Text = "Connect";
+                            break;
+                        case LiveSplitConnectionSessionState.Connected:
+                            connectButton.Enabled = false;
+                            connectButton.Text = "Disconnect";
+                            break;
+                        case LiveSplitConnectionSessionState.Disconnecting:
+                            connectButton.Enabled = false;
+                            connectButton.Text = "Disconnect";
+                            break;
                     }
-
-                    if (wereConditionsMet)
-                    {
-                        ++m_nextSplitConditionIndex;
-                        m_lastWatchLocationValue = -1;
-
-                        if (m_currentSession != null)
-                        {
-                            m_currentSession.SendStartOrSplitTimerCommand();
-                        }
-                    }
-
-                    m_lastWatchLocationValue = currentWatchLocationValue;
+                }
+                else
+                {
+                    connectButton.Enabled = true;
+                    connectButton.Text = "Connect";
                 }
             }
         }
 
-        //(0x079c, [(0x079b, 0x45), (0x079c, 0xdf)]),  # Start
-        //(0x0a42, [(0x0a42, 0x13)]),                  # Ceres elevator
-        //(0x1c1f, [(0x1c1f, 0x09)]),                  # Morph ball
-        //(0x1c1f, [(0x1c1f, 0x02)]),                  # Missiles
-        //(0x1c1f, [(0x1c1f, 0x13)]),                  # Bombs
-        //(0x1c1f, [(0x1c1f, 0x03)]),                  # Super missiles
-        //(0x1c1f, [(0x1c1f, 0x0e)]),                  # Charge beam                 
-        //(0x079c, [(0x079b, 0x9f), (0x079c, 0xa5)]),  # Kraid room
-        //(0x1c1f, [(0x1c1f, 0x07)]),                  # Varia Suit
-        //(0x1c1f, [(0x1c1f, 0x0b)]),                  # Hi-Jump Boots
-        //(0x1c1f, [(0x1c1f, 0x0d)]),                  # Speed Booster
-        //(0x1c1f, [(0x1c1f, 0x10)]),                  # Wave Beam
-        //(0x1c1f, [(0x1c1f, 0x0f)]),                  # Ice beam
-        //(0x1c1f, [(0x1c1f, 0x04)]),                  # Power bomb
-        //(0x079c, [(0x079b, 0x13), (0x079c, 0xcd)]),  # Phantoon room
-        //(0x1c1f, [(0x1c1f, 0x1a)]),                  # Gravity Suit
-        //(0x079c, [(0x079b, 0x5e), (0x079c, 0xd9)]),  # Botwoon's room
-        //(0x079c, [(0x079b, 0x60), (0x079c, 0xda)]),  # Draygon's room
-        //(0x1c1f, [(0x1c1f, 0x0c)]),                  # Space jump
-        //(0x1c1f, [(0x1c1f, 0x12)])]                  # Plasma beam
-        private List<MemoryTrigger> m_splitConditionList = new List<MemoryTrigger>
+        private void UpdateMemoryWatchers()
         {
-            new MemoryTrigger(0x079c, new List<Tuple<uint, uint>>
-            {
-                new Tuple<uint, uint>(0x079c, 0xdf),
-                new Tuple<uint, uint>(0x079b, 0x45),
-            }),
-            new MemoryTrigger(0x0a42, new List<Tuple<uint, uint>>
-            {
-                new Tuple<uint, uint>(0x0a42, 0x13),
-            }),
-            new MemoryTrigger(0x1c1f, new List<Tuple<uint, uint>>
-            {
-                new Tuple<uint, uint>(0x1c1f, 0x09),
-            }),
-        };
+            //if (m_nextSplitConditionIndex < m_splitTriggerList.Count)
+            //{
+            //    var currentSplitCondition = m_splitTriggerList[m_nextSplitConditionIndex];
+
+            //    //if (wereConditionsMet)
+            //    //{
+            //    //    ++m_nextSplitConditionIndex;
+            //    //    m_lastWatchLocationValue = -1;
+
+            //    //    if (m_currentSession != null)
+            //    //    {
+            //    //        m_currentSession.SendStartOrSplitTimerCommand();
+            //    //    }
+            //    //}
+            //}
+        }
+
+        private List<MemoryTrigger> m_splitTriggerList;
         private int m_nextSplitConditionIndex = 0;
-        private int m_lastWatchLocationValue = -1;
-        private BizHawkAutoSplitTool.LiveSplitConnectionSession m_currentSession;
+        private LiveSplitConnectionSession m_currentSession;
     }
 }
